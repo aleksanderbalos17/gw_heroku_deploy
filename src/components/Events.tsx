@@ -1,20 +1,24 @@
 import React, { useState, useEffect } from 'react';
-import { Search, ChevronLeft, ChevronRight, Pencil, Trash2, Plus, ChevronDown } from 'lucide-react';
+import { Search, ChevronLeft, ChevronRight, Pencil, Trash2, Plus, ChevronDown, X } from 'lucide-react';
 import axios from 'axios';
 import { ADMIN_BASE_URL } from '../constants/api';
 
 interface Event {
   id: string;
   name: string;
-  eventType: string;
-  day: number;
-  time: number;
+  type_id: string;
+  type_name: string;
+  date: string;
+  time: string;
   duration: number;
-  churchLocationId: string;
-  eventFrequencyId: string;
-  additionalText: string;
-  churchName: string;
-  locationAddress: string;
+  church_id: string;
+  church_name: string;
+  location_id: string | null;
+  frequency_id: string;
+  frequency_name: string;
+  notes: string;
+  created_at: string;
+  updated_at: string;
 }
 
 interface EventFrequency {
@@ -40,6 +44,41 @@ interface Church {
   denomination_id: string;
 }
 
+interface EventType {
+  id: string;
+  name: string;
+  created_at: string;
+  updated_at: string | null;
+}
+
+interface ChurchLocation {
+  id: string;
+  church_id: string;
+  name: string;
+  address: string;
+  latitude: string | null;
+  longitude: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+interface PaginationData {
+  current_page: number;
+  per_page: number;
+  total: number;
+  total_pages: number;
+  has_next_page: boolean;
+  has_prev_page: boolean;
+}
+
+interface ApiResponse {
+  status: string;
+  data: {
+    events: Event[];
+    pagination: PaginationData;
+  };
+}
+
 interface DeleteModalProps {
   event: Event;
   onClose: () => void;
@@ -50,16 +89,22 @@ interface DeleteModalProps {
 interface EditModalProps {
   event: Event;
   onClose: () => void;
-  onConfirm: (eventData: Partial<Event>) => Promise<void>;
+  onConfirm: (eventData: FormData) => Promise<void>;
   isSubmitting: boolean;
+  eventFrequencies: EventFrequency[];
+  churches: Church[];
+  eventTypes: EventType[];
+  churchLocations: ChurchLocation[];
 }
 
 interface AddModalProps {
   onClose: () => void;
-  onConfirm: (eventData: Omit<Event, 'id'>) => Promise<void>;
+  onConfirm: (eventData: FormData) => Promise<void>;
   isSubmitting: boolean;
   eventFrequencies: EventFrequency[];
   churches: Church[];
+  eventTypes: EventType[];
+  churchLocations: ChurchLocation[];
 }
 
 function DeleteModal({ event, onClose, onConfirm, isDeleting }: DeleteModalProps) {
@@ -91,14 +136,58 @@ function DeleteModal({ event, onClose, onConfirm, isDeleting }: DeleteModalProps
   );
 }
 
-function EditModal({ event, onClose, onConfirm, isSubmitting }: EditModalProps) {
+function EditModal({ event, onClose, onConfirm, isSubmitting, eventFrequencies, churches, eventTypes, churchLocations }: EditModalProps) {
   const [name, setName] = useState(event.name);
-  const [eventType, setEventType] = useState(event.eventType);
-  const [day, setDay] = useState(event.day);
-  const [time, setTime] = useState(event.time);
+  const [selectedEventType, setSelectedEventType] = useState<EventType | null>(null);
+  const [eventTypeSearch, setEventTypeSearch] = useState('');
+  const [showEventTypeDropdown, setShowEventTypeDropdown] = useState(false);
+  const [selectedDate, setSelectedDate] = useState(event.date);
+  const [selectedTime, setSelectedTime] = useState(event.time);
   const [duration, setDuration] = useState(event.duration);
-  const [additionalText, setAdditionalText] = useState(event.additionalText);
+  const [selectedFrequency, setSelectedFrequency] = useState<EventFrequency | null>(null);
+  const [frequencySearch, setFrequencySearch] = useState('');
+  const [showFrequencyDropdown, setShowFrequencyDropdown] = useState(false);
+  const [selectedChurch, setSelectedChurch] = useState<Church | null>(null);
+  const [churchSearch, setChurchSearch] = useState('');
+  const [showChurchDropdown, setShowChurchDropdown] = useState(false);
+  const [selectedLocation, setSelectedLocation] = useState<ChurchLocation | null>(null);
+  const [locationSearch, setLocationSearch] = useState('');
+  const [showLocationDropdown, setShowLocationDropdown] = useState(false);
+  const [notes, setNotes] = useState(event.notes);
   const [error, setError] = useState('');
+
+  // Initialize form with event data
+  useEffect(() => {
+    // Set event type
+    const eventType = eventTypes.find(type => type.id === event.type_id);
+    if (eventType) {
+      setSelectedEventType(eventType);
+      setEventTypeSearch(eventType.name);
+    }
+
+    // Set frequency
+    const frequency = eventFrequencies.find(freq => freq.id === event.frequency_id);
+    if (frequency) {
+      setSelectedFrequency(frequency);
+      setFrequencySearch(frequency.name);
+    }
+
+    // Set church
+    const church = churches.find(c => c.id === event.church_id);
+    if (church) {
+      setSelectedChurch(church);
+      setChurchSearch(church.name);
+    }
+
+    // Set location if exists
+    if (event.location_id) {
+      const location = churchLocations.find(loc => loc.id === event.location_id);
+      if (location) {
+        setSelectedLocation(location);
+        setLocationSearch(location.name);
+      }
+    }
+  }, [event, eventTypes, eventFrequencies, churches, churchLocations]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -106,175 +195,8 @@ function EditModal({ event, onClose, onConfirm, isSubmitting }: EditModalProps) 
       setError('Event name is required');
       return;
     }
-    try {
-      await onConfirm({
-        name,
-        eventType,
-        day,
-        time,
-        duration,
-        additionalText
-      });
-    } catch (err) {
-      setError('Failed to update event');
-    }
-  };
-
-  const formatTimeForInput = (minutes: number): string => {
-    const hours = Math.floor(minutes / 60);
-    const mins = minutes % 60;
-    return `${hours.toString().padStart(2, '0')}:${mins.toString().padStart(2, '0')}`;
-  };
-
-  const parseTimeFromInput = (timeString: string): number => {
-    const [hours, minutes] = timeString.split(':').map(Number);
-    return hours * 60 + minutes;
-  };
-
-  return (
-    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-      <div className="bg-white rounded-lg p-6 max-w-md w-full mx-4 max-h-[90vh] overflow-y-auto">
-        <h3 className="text-lg font-semibold text-gray-900 mb-4">Edit Event</h3>
-        <form onSubmit={handleSubmit}>
-          <div className="space-y-4">
-            <div>
-              <label htmlFor="name" className="block text-sm font-medium text-gray-700 mb-1">
-                Event Name
-              </label>
-              <input
-                type="text"
-                id="name"
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
-                placeholder="Enter event name"
-              />
-            </div>
-
-            <div>
-              <label htmlFor="eventType" className="block text-sm font-medium text-gray-700 mb-1">
-                Event Type
-              </label>
-              <select
-                id="eventType"
-                value={eventType}
-                onChange={(e) => setEventType(e.target.value)}
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
-              >
-                <option value="Service">Service</option>
-                <option value="Prayer Meeting">Prayer Meeting</option>
-                <option value="Bible Study">Bible Study</option>
-                <option value="Youth Group">Youth Group</option>
-              </select>
-            </div>
-
-            <div>
-              <label htmlFor="day" className="block text-sm font-medium text-gray-700 mb-1">
-                Day of Week
-              </label>
-              <select
-                id="day"
-                value={day}
-                onChange={(e) => setDay(parseInt(e.target.value))}
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
-              >
-                <option value={0}>Sunday</option>
-                <option value={1}>Monday</option>
-                <option value={2}>Tuesday</option>
-                <option value={3}>Wednesday</option>
-                <option value={4}>Thursday</option>
-                <option value={5}>Friday</option>
-                <option value={6}>Saturday</option>
-              </select>
-            </div>
-
-            <div>
-              <label htmlFor="time" className="block text-sm font-medium text-gray-700 mb-1">
-                Time
-              </label>
-              <input
-                type="time"
-                id="time"
-                value={formatTimeForInput(time)}
-                onChange={(e) => setTime(parseTimeFromInput(e.target.value))}
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
-              />
-            </div>
-
-            <div>
-              <label htmlFor="duration" className="block text-sm font-medium text-gray-700 mb-1">
-                Duration (minutes)
-              </label>
-              <input
-                type="number"
-                id="duration"
-                value={duration}
-                onChange={(e) => setDuration(parseInt(e.target.value))}
-                min="15"
-                step="15"
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
-              />
-            </div>
-
-            <div>
-              <label htmlFor="additionalText" className="block text-sm font-medium text-gray-700 mb-1">
-                Additional Notes
-              </label>
-              <textarea
-                id="additionalText"
-                value={additionalText}
-                onChange={(e) => setAdditionalText(e.target.value)}
-                rows={3}
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
-                placeholder="Enter additional notes"
-              />
-            </div>
-
-            {error && <p className="text-sm text-red-600">{error}</p>}
-
-            <div className="flex space-x-4 pt-4">
-              <button
-                type="button"
-                onClick={onClose}
-                disabled={isSubmitting}
-                className="flex-1 px-4 py-2 border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50"
-              >
-                Cancel
-              </button>
-              <button
-                type="submit"
-                disabled={isSubmitting}
-                className="flex-1 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:opacity-50"
-              >
-                {isSubmitting ? 'Saving...' : 'Save Changes'}
-              </button>
-            </div>
-          </div>
-        </form>
-      </div>
-    </div>
-  );
-}
-
-function AddModal({ onClose, onConfirm, isSubmitting, eventFrequencies, churches }: AddModalProps) {
-  const [name, setName] = useState('');
-  const [eventType, setEventType] = useState('Service');
-  const [day, setDay] = useState(0);
-  const [time, setTime] = useState(600); // 10:00 AM
-  const [duration, setDuration] = useState(60);
-  const [selectedFrequency, setSelectedFrequency] = useState<EventFrequency | null>(null);
-  const [frequencySearch, setFrequencySearch] = useState('');
-  const [showFrequencyDropdown, setShowFrequencyDropdown] = useState(false);
-  const [selectedChurch, setSelectedChurch] = useState<Church | null>(null);
-  const [churchSearch, setChurchSearch] = useState('');
-  const [showChurchDropdown, setShowChurchDropdown] = useState(false);
-  const [additionalText, setAdditionalText] = useState('');
-  const [error, setError] = useState('');
-
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!name.trim()) {
-      setError('Event name is required');
+    if (!selectedEventType) {
+      setError('Please select an event type');
       return;
     }
     if (!selectedFrequency) {
@@ -286,46 +208,67 @@ function AddModal({ onClose, onConfirm, isSubmitting, eventFrequencies, churches
       return;
     }
     try {
-      await onConfirm({
-        name,
-        eventType,
-        day,
-        time,
-        duration,
-        churchLocationId: selectedChurch.id,
-        eventFrequencyId: selectedFrequency.id,
-        additionalText,
-        churchName: selectedChurch.name,
-        locationAddress: selectedChurch.address || 'No address provided'
-      });
+      const formData = new FormData();
+      formData.append('id', event.id);
+      formData.append('name', name.trim());
+      formData.append('type_id', selectedEventType.id);
+      formData.append('date', selectedDate);
+      formData.append('time', selectedTime);
+      formData.append('duration', duration.toString());
+      formData.append('church_id', selectedChurch.id);
+      if (selectedLocation) {
+        formData.append('location_id', selectedLocation.id);
+      }
+      formData.append('frequency_id', selectedFrequency.id);
+      formData.append('notes', notes.trim());
+
+      await onConfirm(formData);
       onClose();
     } catch (err) {
-      setError('Failed to create event');
+      setError('Failed to update event');
     }
   };
 
-  const formatTimeForInput = (minutes: number): string => {
-    const hours = Math.floor(minutes / 60);
-    const mins = minutes % 60;
-    return `${hours.toString().padStart(2, '0')}:${mins.toString().padStart(2, '0')}`;
-  };
+  // Filter event types based on search term and sort by name
+  const filteredEventTypes = eventTypes
+    .filter(type => 
+      type.name.toLowerCase().includes(eventTypeSearch.toLowerCase())
+    )
+    .sort((a, b) => a.name.localeCompare(b.name));
 
-  const parseTimeFromInput = (timeString: string): number => {
-    const [hours, minutes] = timeString.split(':').map(Number);
-    return hours * 60 + minutes;
-  };
-
-  // Filter active frequencies that should be shown - show ALL matching frequencies, not limited to 5
+  // Filter active frequencies that should be shown
   const filteredFrequencies = eventFrequencies.filter(freq => 
     freq.active === "1" && 
     freq.showme === "1" &&
     freq.name.toLowerCase().includes(frequencySearch.toLowerCase())
   );
 
-  // Filter churches based on search term - show ALL matching churches, not limited to 5
+  // Filter churches based on search term
   const filteredChurches = churches.filter(church => 
     church.name.toLowerCase().includes(churchSearch.toLowerCase())
   );
+
+  // Filter locations for selected church
+  const filteredLocations = selectedChurch 
+    ? churchLocations.filter(location => 
+        location.church_id === selectedChurch.id &&
+        location.name.toLowerCase().includes(locationSearch.toLowerCase())
+      )
+    : [];
+
+  const handleEventTypeSelect = (eventType: EventType) => {
+    setSelectedEventType(eventType);
+    setEventTypeSearch(eventType.name);
+    setShowEventTypeDropdown(false);
+  };
+
+  const handleEventTypeSearchChange = (value: string) => {
+    setEventTypeSearch(value);
+    setShowEventTypeDropdown(true);
+    if (!value) {
+      setSelectedEventType(null);
+    }
+  };
 
   const handleFrequencySelect = (frequency: EventFrequency) => {
     setSelectedFrequency(frequency);
@@ -345,6 +288,9 @@ function AddModal({ onClose, onConfirm, isSubmitting, eventFrequencies, churches
     setSelectedChurch(church);
     setChurchSearch(church.name);
     setShowChurchDropdown(false);
+    // Reset location when church changes
+    setSelectedLocation(null);
+    setLocationSearch('');
   };
 
   const handleChurchSearchChange = (value: string) => {
@@ -352,6 +298,22 @@ function AddModal({ onClose, onConfirm, isSubmitting, eventFrequencies, churches
     setShowChurchDropdown(true);
     if (!value) {
       setSelectedChurch(null);
+      setSelectedLocation(null);
+      setLocationSearch('');
+    }
+  };
+
+  const handleLocationSelect = (location: ChurchLocation) => {
+    setSelectedLocation(location);
+    setLocationSearch(location.name);
+    setShowLocationDropdown(false);
+  };
+
+  const handleLocationSearchChange = (value: string) => {
+    setLocationSearch(value);
+    setShowLocationDropdown(true);
+    if (!value) {
+      setSelectedLocation(null);
     }
   };
 
@@ -359,11 +321,17 @@ function AddModal({ onClose, onConfirm, isSubmitting, eventFrequencies, churches
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
       const target = event.target as Element;
+      if (!target.closest('.event-type-dropdown-container')) {
+        setShowEventTypeDropdown(false);
+      }
       if (!target.closest('.frequency-dropdown-container')) {
         setShowFrequencyDropdown(false);
       }
       if (!target.closest('.church-dropdown-container')) {
         setShowChurchDropdown(false);
+      }
+      if (!target.closest('.location-dropdown-container')) {
+        setShowLocationDropdown(false);
       }
     };
 
@@ -373,82 +341,58 @@ function AddModal({ onClose, onConfirm, isSubmitting, eventFrequencies, churches
 
   return (
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-      <div className="bg-white rounded-lg w-full max-w-6xl max-h-[90vh] overflow-y-auto">
+      <div className="bg-white rounded-xl w-full max-w-2xl max-h-[90vh] overflow-y-auto">
         <div className="p-8">
-          <div className="flex items-center justify-between mb-6">
-            <h3 className="text-2xl font-semibold text-gray-900">Add New Event</h3>
+          <div className="flex items-center justify-between mb-8">
+            <h3 className="text-2xl font-semibold text-gray-900">Edit Event</h3>
             <button
               onClick={onClose}
               className="text-gray-400 hover:text-gray-600 transition-colors"
             >
-              <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-              </svg>
+              <X className="w-6 h-6" />
             </button>
           </div>
           
-          <form onSubmit={handleSubmit}>
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+          <form onSubmit={handleSubmit} className="space-y-6">
+            {/* Event Name */}
+            <div>
+              <label htmlFor="name" className="block text-sm font-medium text-gray-700 mb-2">
+                Event Name
+              </label>
+              <input
+                type="text"
+                id="name"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+                placeholder="Enter event name"
+              />
+            </div>
+
+            {/* Date / Time / Duration */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
               <div>
-                <label htmlFor="name" className="block text-sm font-medium text-gray-700 mb-2">
-                  Event Name
+                <label htmlFor="date" className="block text-sm font-medium text-gray-700 mb-2">
+                  Date
                 </label>
                 <input
-                  type="text"
-                  id="name"
-                  value={name}
-                  onChange={(e) => setName(e.target.value)}
+                  type="date"
+                  id="date"
+                  value={selectedDate}
+                  onChange={(e) => setSelectedDate(e.target.value)}
                   className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
-                  placeholder="Enter event name"
                 />
               </div>
 
               <div>
-                <label htmlFor="eventType" className="block text-sm font-medium text-gray-700 mb-2">
-                  Event Type
-                </label>
-                <select
-                  id="eventType"
-                  value={eventType}
-                  onChange={(e) => setEventType(e.target.value)}
-                  className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
-                >
-                  <option value="Service">Service</option>
-                  <option value="Prayer Meeting">Prayer Meeting</option>
-                  <option value="Bible Study">Bible Study</option>
-                  <option value="Youth Group">Youth Group</option>
-                </select>
-              </div>
-
-              <div>
-                <label htmlFor="day" className="block text-sm font-medium text-gray-700 mb-2">
-                  Day of Week
-                </label>
-                <select
-                  id="day"
-                  value={day}
-                  onChange={(e) => setDay(parseInt(e.target.value))}
-                  className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
-                >
-                  <option value={0}>Sunday</option>
-                  <option value={1}>Monday</option>
-                  <option value={2}>Tuesday</option>
-                  <option value={3}>Wednesday</option>
-                  <option value={4}>Thursday</option>
-                  <option value={5}>Friday</option>
-                  <option value={6}>Saturday</option>
-                </select>
-              </div>
-
-              <div>
                 <label htmlFor="time" className="block text-sm font-medium text-gray-700 mb-2">
-                  Time
+                  Time (24h format)
                 </label>
                 <input
                   type="time"
                   id="time"
-                  value={formatTimeForInput(time)}
-                  onChange={(e) => setTime(parseTimeFromInput(e.target.value))}
+                  value={selectedTime}
+                  onChange={(e) => setSelectedTime(e.target.value)}
                   className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
                 />
               </div>
@@ -467,44 +411,43 @@ function AddModal({ onClose, onConfirm, isSubmitting, eventFrequencies, churches
                   className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
                 />
               </div>
+            </div>
 
-              <div className="relative church-dropdown-container">
-                <label htmlFor="church" className="block text-sm font-medium text-gray-700 mb-2">
-                  Church
+            {/* Event Type / Frequency */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              <div className="relative event-type-dropdown-container">
+                <label htmlFor="eventType" className="block text-sm font-medium text-gray-700 mb-2">
+                  Event Type
                 </label>
                 <div className="relative">
                   <input
                     type="text"
-                    id="church"
-                    value={churchSearch}
-                    onChange={(e) => handleChurchSearchChange(e.target.value)}
-                    onFocus={() => setShowChurchDropdown(true)}
+                    id="eventType"
+                    value={eventTypeSearch}
+                    onChange={(e) => handleEventTypeSearchChange(e.target.value)}
+                    onFocus={() => setShowEventTypeDropdown(true)}
                     className="w-full px-4 py-3 pr-10 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
-                    placeholder="Search and select a church"
+                    placeholder="Search and select event type"
                   />
                   <ChevronDown className="absolute right-3 top-1/2 transform -translate-y-1/2 w-5 h-5 text-gray-400" />
                   
-                  {showChurchDropdown && (
+                  {showEventTypeDropdown && (
                     <div className="absolute z-10 w-full mt-1 bg-white border border-gray-300 rounded-lg shadow-lg">
-                      {/* Set max height to show approximately 5 items (each item ~60px) */}
-                      <div className="max-h-80 overflow-y-auto">
-                        {filteredChurches.length > 0 ? (
-                          filteredChurches.map((church) => (
+                      <div className="max-h-40 overflow-y-auto">
+                        {filteredEventTypes.length > 0 ? (
+                          filteredEventTypes.map((eventType) => (
                             <button
-                              key={church.id}
+                              key={eventType.id}
                               type="button"
-                              onClick={() => handleChurchSelect(church)}
+                              onClick={() => handleEventTypeSelect(eventType)}
                               className="w-full px-4 py-3 text-left hover:bg-gray-50 focus:bg-gray-50 focus:outline-none border-b border-gray-100 last:border-b-0"
                             >
-                              <div className="font-medium text-gray-900">{church.name}</div>
-                              {church.address && (
-                                <div className="text-sm text-gray-500 mt-1">{church.address}</div>
-                              )}
+                              <div className="font-medium text-gray-900">{eventType.name}</div>
                             </button>
                           ))
                         ) : (
                           <div className="px-4 py-3 text-gray-500 text-center">
-                            {churchSearch ? 'No churches found' : 'Start typing to search churches'}
+                            {eventTypeSearch ? 'No event types found' : 'Start typing to search event types'}
                           </div>
                         )}
                       </div>
@@ -531,8 +474,7 @@ function AddModal({ onClose, onConfirm, isSubmitting, eventFrequencies, churches
                   
                   {showFrequencyDropdown && (
                     <div className="absolute z-10 w-full mt-1 bg-white border border-gray-300 rounded-lg shadow-lg">
-                      {/* Set max height to show approximately 5 items (each item ~60px) */}
-                      <div className="max-h-80 overflow-y-auto">
+                      <div className="max-h-40 overflow-y-auto">
                         {filteredFrequencies.length > 0 ? (
                           filteredFrequencies.map((frequency) => (
                             <button
@@ -557,42 +499,109 @@ function AddModal({ onClose, onConfirm, isSubmitting, eventFrequencies, churches
                   )}
                 </div>
               </div>
+            </div>
 
-              <div>
-                <label htmlFor="location" className="block text-sm font-medium text-gray-700 mb-2">
-                  Location
+            {/* Church / Location */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              <div className="relative church-dropdown-container">
+                <label htmlFor="church" className="block text-sm font-medium text-gray-700 mb-2">
+                  Church
                 </label>
-                <input
-                  type="text"
-                  id="location"
-                  value={selectedChurch?.address || ''}
-                  readOnly
-                  className="w-full px-4 py-3 border border-gray-300 rounded-lg bg-gray-50 text-gray-600"
-                  placeholder="Location will be filled based on church selection"
-                />
+                <div className="relative">
+                  <input
+                    type="text"
+                    id="church"
+                    value={churchSearch}
+                    onChange={(e) => handleChurchSearchChange(e.target.value)}
+                    onFocus={() => setShowChurchDropdown(true)}
+                    className="w-full px-4 py-3 pr-10 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+                    placeholder="Search and select a church"
+                  />
+                  <ChevronDown className="absolute right-3 top-1/2 transform -translate-y-1/2 w-5 h-5 text-gray-400" />
+                  
+                  {showChurchDropdown && (
+                    <div className="absolute z-10 w-full mt-1 bg-white border border-gray-300 rounded-lg shadow-lg">
+                      <div className="max-h-40 overflow-y-auto">
+                        {filteredChurches.length > 0 ? (
+                          filteredChurches.map((church) => (
+                            <button
+                              key={church.id}
+                              type="button"
+                              onClick={() => handleChurchSelect(church)}
+                              className="w-full px-4 py-3 text-left hover:bg-gray-50 focus:bg-gray-50 focus:outline-none border-b border-gray-100 last:border-b-0"
+                            >
+                              <div className="font-medium text-gray-900">{church.name}</div>
+                              {church.address && (
+                                <div className="text-sm text-gray-500 mt-1">{church.address}</div>
+                              )}
+                            </button>
+                          ))
+                        ) : (
+                          <div className="px-4 py-3 text-gray-500 text-center">
+                            {churchSearch ? 'No churches found' : 'Start typing to search churches'}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                </div>
               </div>
 
-              <div>
-                <label htmlFor="organizer" className="block text-sm font-medium text-gray-700 mb-2">
-                  Organizer
+              <div className="relative location-dropdown-container">
+                <label htmlFor="location" className="block text-sm font-medium text-gray-700 mb-2">
+                  Location <span className="text-gray-400">(Optional)</span>
                 </label>
-                <input
-                  type="text"
-                  id="organizer"
-                  className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
-                  placeholder="Enter organizer name"
-                />
+                <div className="relative">
+                  <input
+                    type="text"
+                    id="location"
+                    value={locationSearch}
+                    onChange={(e) => handleLocationSearchChange(e.target.value)}
+                    onFocus={() => setShowLocationDropdown(true)}
+                    disabled={!selectedChurch}
+                    className="w-full px-4 py-3 pr-10 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 disabled:bg-gray-50 disabled:text-gray-500"
+                    placeholder={selectedChurch ? "Search and select location" : "Select a church first"}
+                  />
+                  <ChevronDown className="absolute right-3 top-1/2 transform -translate-y-1/2 w-5 h-5 text-gray-400" />
+                  
+                  {showLocationDropdown && selectedChurch && (
+                    <div className="absolute z-10 w-full mt-1 bg-white border border-gray-300 rounded-lg shadow-lg">
+                      <div className="max-h-40 overflow-y-auto">
+                        {filteredLocations.length > 0 ? (
+                          filteredLocations.map((location) => (
+                            <button
+                              key={location.id}
+                              type="button"
+                              onClick={() => handleLocationSelect(location)}
+                              className="w-full px-4 py-3 text-left hover:bg-gray-50 focus:bg-gray-50 focus:outline-none border-b border-gray-100 last:border-b-0"
+                            >
+                              <div className="font-medium text-gray-900">{location.name}</div>
+                              {location.address && (
+                                <div className="text-sm text-gray-500 mt-1">{location.address}</div>
+                              )}
+                            </button>
+                          ))
+                        ) : (
+                          <div className="px-4 py-3 text-gray-500 text-center">
+                            {locationSearch ? 'No locations found' : 'No locations available for this church'}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                </div>
               </div>
             </div>
 
-            <div className="mt-6">
-              <label htmlFor="additionalText" className="block text-sm font-medium text-gray-700 mb-2">
+            {/* Additional Notes */}
+            <div>
+              <label htmlFor="notes" className="block text-sm font-medium text-gray-700 mb-2">
                 Additional Notes
               </label>
               <textarea
-                id="additionalText"
-                value={additionalText}
-                onChange={(e) => setAdditionalText(e.target.value)}
+                id="notes"
+                value={notes}
+                onChange={(e) => setNotes(e.target.value)}
                 rows={4}
                 className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
                 placeholder="Enter additional notes, special instructions, or event description"
@@ -600,12 +609,483 @@ function AddModal({ onClose, onConfirm, isSubmitting, eventFrequencies, churches
             </div>
 
             {error && (
-              <div className="mt-4 p-3 bg-red-50 border border-red-200 rounded-lg">
+              <div className="p-3 bg-red-50 border border-red-200 rounded-lg">
                 <p className="text-sm text-red-600">{error}</p>
               </div>
             )}
 
-            <div className="flex justify-end space-x-4 mt-8 pt-6 border-t border-gray-200">
+            <div className="flex justify-end space-x-4 pt-6 border-t border-gray-200">
+              <button
+                type="button"
+                onClick={onClose}
+                disabled={isSubmitting}
+                className="px-6 py-3 border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50 font-medium transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                disabled={isSubmitting}
+                className="px-8 py-3 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:opacity-50 font-medium transition-colors"
+              >
+                {isSubmitting ? 'Updating...' : 'Update Event'}
+              </button>
+            </div>
+          </form>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function AddModal({ onClose, onConfirm, isSubmitting, eventFrequencies, churches, eventTypes, churchLocations }: AddModalProps) {
+  const [name, setName] = useState('');
+  const [selectedEventType, setSelectedEventType] = useState<EventType | null>(null);
+  const [eventTypeSearch, setEventTypeSearch] = useState('');
+  const [showEventTypeDropdown, setShowEventTypeDropdown] = useState(false);
+  const [selectedDate, setSelectedDate] = useState(() => {
+    const today = new Date();
+    return today.toISOString().split('T')[0];
+  });
+  const [selectedTime, setSelectedTime] = useState('10:00');
+  const [duration, setDuration] = useState(60);
+  const [selectedFrequency, setSelectedFrequency] = useState<EventFrequency | null>(null);
+  const [frequencySearch, setFrequencySearch] = useState('');
+  const [showFrequencyDropdown, setShowFrequencyDropdown] = useState(false);
+  const [selectedChurch, setSelectedChurch] = useState<Church | null>(null);
+  const [churchSearch, setChurchSearch] = useState('');
+  const [showChurchDropdown, setShowChurchDropdown] = useState(false);
+  const [selectedLocation, setSelectedLocation] = useState<ChurchLocation | null>(null);
+  const [locationSearch, setLocationSearch] = useState('');
+  const [showLocationDropdown, setShowLocationDropdown] = useState(false);
+  const [notes, setNotes] = useState('');
+  const [error, setError] = useState('');
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!name.trim()) {
+      setError('Event name is required');
+      return;
+    }
+    if (!selectedEventType) {
+      setError('Please select an event type');
+      return;
+    }
+    if (!selectedFrequency) {
+      setError('Please select an event frequency');
+      return;
+    }
+    if (!selectedChurch) {
+      setError('Please select a church');
+      return;
+    }
+    try {
+      const formData = new FormData();
+      formData.append('name', name.trim());
+      formData.append('type_id', selectedEventType.id);
+      formData.append('date', selectedDate);
+      formData.append('time', selectedTime);
+      formData.append('duration', duration.toString());
+      formData.append('church_id', selectedChurch.id);
+      if (selectedLocation) {
+        formData.append('location_id', selectedLocation.id);
+      }
+      formData.append('frequency_id', selectedFrequency.id);
+      formData.append('notes', notes.trim());
+
+      await onConfirm(formData);
+      onClose();
+    } catch (err) {
+      setError('Failed to create event');
+    }
+  };
+
+  // Filter event types based on search term and sort by name
+  const filteredEventTypes = eventTypes
+    .filter(type => 
+      type.name.toLowerCase().includes(eventTypeSearch.toLowerCase())
+    )
+    .sort((a, b) => a.name.localeCompare(b.name));
+
+  // Filter active frequencies that should be shown
+  const filteredFrequencies = eventFrequencies.filter(freq => 
+    freq.active === "1" && 
+    freq.showme === "1" &&
+    freq.name.toLowerCase().includes(frequencySearch.toLowerCase())
+  );
+
+  // Filter churches based on search term
+  const filteredChurches = churches.filter(church => 
+    church.name.toLowerCase().includes(churchSearch.toLowerCase())
+  );
+
+  // Filter locations for selected church
+  const filteredLocations = selectedChurch 
+    ? churchLocations.filter(location => 
+        location.church_id === selectedChurch.id &&
+        location.name.toLowerCase().includes(locationSearch.toLowerCase())
+      )
+    : [];
+
+  const handleEventTypeSelect = (eventType: EventType) => {
+    setSelectedEventType(eventType);
+    setEventTypeSearch(eventType.name);
+    setShowEventTypeDropdown(false);
+  };
+
+  const handleEventTypeSearchChange = (value: string) => {
+    setEventTypeSearch(value);
+    setShowEventTypeDropdown(true);
+    if (!value) {
+      setSelectedEventType(null);
+    }
+  };
+
+  const handleFrequencySelect = (frequency: EventFrequency) => {
+    setSelectedFrequency(frequency);
+    setFrequencySearch(frequency.name);
+    setShowFrequencyDropdown(false);
+  };
+
+  const handleFrequencySearchChange = (value: string) => {
+    setFrequencySearch(value);
+    setShowFrequencyDropdown(true);
+    if (!value) {
+      setSelectedFrequency(null);
+    }
+  };
+
+  const handleChurchSelect = (church: Church) => {
+    setSelectedChurch(church);
+    setChurchSearch(church.name);
+    setShowChurchDropdown(false);
+    // Reset location when church changes
+    setSelectedLocation(null);
+    setLocationSearch('');
+  };
+
+  const handleChurchSearchChange = (value: string) => {
+    setChurchSearch(value);
+    setShowChurchDropdown(true);
+    if (!value) {
+      setSelectedChurch(null);
+      setSelectedLocation(null);
+      setLocationSearch('');
+    }
+  };
+
+  const handleLocationSelect = (location: ChurchLocation) => {
+    setSelectedLocation(location);
+    setLocationSearch(location.name);
+    setShowLocationDropdown(false);
+  };
+
+  const handleLocationSearchChange = (value: string) => {
+    setLocationSearch(value);
+    setShowLocationDropdown(true);
+    if (!value) {
+      setSelectedLocation(null);
+    }
+  };
+
+  // Close dropdowns when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      const target = event.target as Element;
+      if (!target.closest('.event-type-dropdown-container')) {
+        setShowEventTypeDropdown(false);
+      }
+      if (!target.closest('.frequency-dropdown-container')) {
+        setShowFrequencyDropdown(false);
+      }
+      if (!target.closest('.church-dropdown-container')) {
+        setShowChurchDropdown(false);
+      }
+      if (!target.closest('.location-dropdown-container')) {
+        setShowLocationDropdown(false);
+      }
+    };
+
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  return (
+    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+      <div className="bg-white rounded-xl w-full max-w-2xl max-h-[90vh] overflow-y-auto">
+        <div className="p-8">
+          <div className="flex items-center justify-between mb-8">
+            <h3 className="text-2xl font-semibold text-gray-900">Add New Event</h3>
+            <button
+              onClick={onClose}
+              className="text-gray-400 hover:text-gray-600 transition-colors"
+            >
+              <X className="w-6 h-6" />
+            </button>
+          </div>
+          
+          <form onSubmit={handleSubmit} className="space-y-6">
+            {/* Event Name */}
+            <div>
+              <label htmlFor="name" className="block text-sm font-medium text-gray-700 mb-2">
+                Event Name
+              </label>
+              <input
+                type="text"
+                id="name"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+                placeholder="Enter event name"
+              />
+            </div>
+
+            {/* Date / Time / Duration */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+              <div>
+                <label htmlFor="date" className="block text-sm font-medium text-gray-700 mb-2">
+                  Date
+                </label>
+                <input
+                  type="date"
+                  id="date"
+                  value={selectedDate}
+                  onChange={(e) => setSelectedDate(e.target.value)}
+                  className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+                />
+              </div>
+
+              <div>
+                <label htmlFor="time" className="block text-sm font-medium text-gray-700 mb-2">
+                  Time (24h format)
+                </label>
+                <input
+                  type="time"
+                  id="time"
+                  value={selectedTime}
+                  onChange={(e) => setSelectedTime(e.target.value)}
+                  className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+                />
+              </div>
+
+              <div>
+                <label htmlFor="duration" className="block text-sm font-medium text-gray-700 mb-2">
+                  Duration (minutes)
+                </label>
+                <input
+                  type="number"
+                  id="duration"
+                  value={duration}
+                  onChange={(e) => setDuration(parseInt(e.target.value))}
+                  min="15"
+                  step="15"
+                  className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+                />
+              </div>
+            </div>
+
+            {/* Event Type / Frequency */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              <div className="relative event-type-dropdown-container">
+                <label htmlFor="eventType" className="block text-sm font-medium text-gray-700 mb-2">
+                  Event Type
+                </label>
+                <div className="relative">
+                  <input
+                    type="text"
+                    id="eventType"
+                    value={eventTypeSearch}
+                    onChange={(e) => handleEventTypeSearchChange(e.target.value)}
+                    onFocus={() => setShowEventTypeDropdown(true)}
+                    className="w-full px-4 py-3 pr-10 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+                    placeholder="Search and select event type"
+                  />
+                  <ChevronDown className="absolute right-3 top-1/2 transform -translate-y-1/2 w-5 h-5 text-gray-400" />
+                  
+                  {showEventTypeDropdown && (
+                    <div className="absolute z-10 w-full mt-1 bg-white border border-gray-300 rounded-lg shadow-lg">
+                      <div className="max-h-40 overflow-y-auto">
+                        {filteredEventTypes.length > 0 ? (
+                          filteredEventTypes.map((eventType) => (
+                            <button
+                              key={eventType.id}
+                              type="button"
+                              onClick={() => handleEventTypeSelect(eventType)}
+                              className="w-full px-4 py-3 text-left hover:bg-gray-50 focus:bg-gray-50 focus:outline-none border-b border-gray-100 last:border-b-0"
+                            >
+                              <div className="font-medium text-gray-900">{eventType.name}</div>
+                            </button>
+                          ))
+                        ) : (
+                          <div className="px-4 py-3 text-gray-500 text-center">
+                            {eventTypeSearch ? 'No event types found' : 'Start typing to search event types'}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              <div className="relative frequency-dropdown-container">
+                <label htmlFor="frequency" className="block text-sm font-medium text-gray-700 mb-2">
+                  Frequency
+                </label>
+                <div className="relative">
+                  <input
+                    type="text"
+                    id="frequency"
+                    value={frequencySearch}
+                    onChange={(e) => handleFrequencySearchChange(e.target.value)}
+                    onFocus={() => setShowFrequencyDropdown(true)}
+                    className="w-full px-4 py-3 pr-10 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+                    placeholder="Search and select frequency"
+                  />
+                  <ChevronDown className="absolute right-3 top-1/2 transform -translate-y-1/2 w-5 h-5 text-gray-400" />
+                  
+                  {showFrequencyDropdown && (
+                    <div className="absolute z-10 w-full mt-1 bg-white border border-gray-300 rounded-lg shadow-lg">
+                      <div className="max-h-40 overflow-y-auto">
+                        {filteredFrequencies.length > 0 ? (
+                          filteredFrequencies.map((frequency) => (
+                            <button
+                              key={frequency.id}
+                              type="button"
+                              onClick={() => handleFrequencySelect(frequency)}
+                              className="w-full px-4 py-3 text-left hover:bg-gray-50 focus:bg-gray-50 focus:outline-none border-b border-gray-100 last:border-b-0"
+                            >
+                              <div className="font-medium text-gray-900">{frequency.name}</div>
+                              {frequency.notes && (
+                                <div className="text-sm text-gray-500 mt-1">{frequency.notes}</div>
+                              )}
+                            </button>
+                          ))
+                        ) : (
+                          <div className="px-4 py-3 text-gray-500 text-center">
+                            {frequencySearch ? 'No frequencies found' : 'Start typing to search frequencies'}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            {/* Church / Location */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              <div className="relative church-dropdown-container">
+                <label htmlFor="church" className="block text-sm font-medium text-gray-700 mb-2">
+                  Church
+                </label>
+                <div className="relative">
+                  <input
+                    type="text"
+                    id="church"
+                    value={churchSearch}
+                    onChange={(e) => handleChurchSearchChange(e.target.value)}
+                    onFocus={() => setShowChurchDropdown(true)}
+                    className="w-full px-4 py-3 pr-10 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+                    placeholder="Search and select a church"
+                  />
+                  <ChevronDown className="absolute right-3 top-1/2 transform -translate-y-1/2 w-5 h-5 text-gray-400" />
+                  
+                  {showChurchDropdown && (
+                    <div className="absolute z-10 w-full mt-1 bg-white border border-gray-300 rounded-lg shadow-lg">
+                      <div className="max-h-40 overflow-y-auto">
+                        {filteredChurches.length > 0 ? (
+                          filteredChurches.map((church) => (
+                            <button
+                              key={church.id}
+                              type="button"
+                              onClick={() => handleChurchSelect(church)}
+                              className="w-full px-4 py-3 text-left hover:bg-gray-50 focus:bg-gray-50 focus:outline-none border-b border-gray-100 last:border-b-0"
+                            >
+                              <div className="font-medium text-gray-900">{church.name}</div>
+                              {church.address && (
+                                <div className="text-sm text-gray-500 mt-1">{church.address}</div>
+                              )}
+                            </button>
+                          ))
+                        ) : (
+                          <div className="px-4 py-3 text-gray-500 text-center">
+                            {churchSearch ? 'No churches found' : 'Start typing to search churches'}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              <div className="relative location-dropdown-container">
+                <label htmlFor="location" className="block text-sm font-medium text-gray-700 mb-2">
+                  Location <span className="text-gray-400">(Optional)</span>
+                </label>
+                <div className="relative">
+                  <input
+                    type="text"
+                    id="location"
+                    value={locationSearch}
+                    onChange={(e) => handleLocationSearchChange(e.target.value)}
+                    onFocus={() => setShowLocationDropdown(true)}
+                    disabled={!selectedChurch}
+                    className="w-full px-4 py-3 pr-10 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 disabled:bg-gray-50 disabled:text-gray-500"
+                    placeholder={selectedChurch ? "Search and select location" : "Select a church first"}
+                  />
+                  <ChevronDown className="absolute right-3 top-1/2 transform -translate-y-1/2 w-5 h-5 text-gray-400" />
+                  
+                  {showLocationDropdown && selectedChurch && (
+                    <div className="absolute z-10 w-full mt-1 bg-white border border-gray-300 rounded-lg shadow-lg">
+                      <div className="max-h-40 overflow-y-auto">
+                        {filteredLocations.length > 0 ? (
+                          filteredLocations.map((location) => (
+                            <button
+                              key={location.id}
+                              type="button"
+                              onClick={() => handleLocationSelect(location)}
+                              className="w-full px-4 py-3 text-left hover:bg-gray-50 focus:bg-gray-50 focus:outline-none border-b border-gray-100 last:border-b-0"
+                            >
+                              <div className="font-medium text-gray-900">{location.name}</div>
+                              {location.address && (
+                                <div className="text-sm text-gray-500 mt-1">{location.address}</div>
+                              )}
+                            </button>
+                          ))
+                        ) : (
+                          <div className="px-4 py-3 text-gray-500 text-center">
+                            {locationSearch ? 'No locations found' : 'No locations available for this church'}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            {/* Additional Notes */}
+            <div>
+              <label htmlFor="notes" className="block text-sm font-medium text-gray-700 mb-2">
+                Additional Notes
+              </label>
+              <textarea
+                id="notes"
+                value={notes}
+                onChange={(e) => setNotes(e.target.value)}
+                rows={4}
+                className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+                placeholder="Enter additional notes, special instructions, or event description"
+              />
+            </div>
+
+            {error && (
+              <div className="p-3 bg-red-50 border border-red-200 rounded-lg">
+                <p className="text-sm text-red-600">{error}</p>
+              </div>
+            )}
+
+            <div className="flex justify-end space-x-4 pt-6 border-t border-gray-200">
               <button
                 type="button"
                 onClick={onClose}
@@ -629,17 +1109,22 @@ function AddModal({ onClose, onConfirm, isSubmitting, eventFrequencies, churches
   );
 }
 
-function formatTime(minutes: number): string {
-  const hours = Math.floor(minutes / 60);
-  const mins = minutes % 60;
+function formatTime(timeString: string): string {
+  const [hours, minutes] = timeString.split(':').map(Number);
   const period = hours >= 12 ? 'PM' : 'AM';
   const displayHours = hours % 12 || 12;
-  return `${displayHours}:${mins.toString().padStart(2, '0')} ${period}`;
+  return `${displayHours}:${minutes.toString().padStart(2, '0')} ${period}`;
 }
 
-function getDayName(day: number): string {
-  const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
-  return days[day];
+function formatDate(dateString: string): string {
+  const date = new Date(dateString);
+  const options: Intl.DateTimeFormatOptions = { 
+    weekday: 'short', 
+    year: 'numeric', 
+    month: 'short', 
+    day: 'numeric' 
+  };
+  return date.toLocaleDateString('en-US', options);
 }
 
 export function Events() {
@@ -650,139 +1135,196 @@ export function Events() {
   const [showAddModal, setShowAddModal] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
+  const [events, setEvents] = useState<Event[]>([]);
   const [eventFrequencies, setEventFrequencies] = useState<EventFrequency[]>([]);
   const [churches, setChurches] = useState<Church[]>([]);
-  const [isLoadingFrequencies, setIsLoadingFrequencies] = useState(false);
-  const [isLoadingChurches, setIsLoadingChurches] = useState(false);
-  
-  // Mock data - replace with actual API call
-  const mockEvents: Event[] = Array.from({ length: 50 }, (_, i) => ({
-    id: `${i + 1}`,
-    name: `Event ${i + 1}`,
-    eventType: ['Service', 'Prayer Meeting', 'Bible Study', 'Youth Group'][i % 4],
-    day: i % 7,
-    time: (Math.floor(Math.random() * 17) + 6) * 60 + Math.floor(Math.random() * 4) * 15, // Between 6:00 AM and 10:00 PM
-    duration: [60, 90, 120][i % 3],
-    churchLocationId: `loc-${i + 1}`,
-    eventFrequencyId: `freq-${i + 1}`,
-    additionalText: i % 3 === 0 ? 'Special notes for this event' : '',
-    churchName: `Church ${Math.floor(i / 3) + 1}`,
-    locationAddress: `${100 + i} Church Street, City ${i % 5 + 1}`
-  }));
+  const [eventTypes, setEventTypes] = useState<EventType[]>([]);
+  const [churchLocations, setChurchLocations] = useState<ChurchLocation[]>([]);
+  const [pagination, setPagination] = useState<PaginationData | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
-  const [events, setEvents] = useState<Event[]>(mockEvents);
+  // Fetch events from API
+  const fetchEvents = async (page: number) => {
+    try {
+      setIsLoading(true);
+      setError(null);
+      const response = await axios.get<ApiResponse>(`${ADMIN_BASE_URL}/events`, {
+        params: {
+          page,
+          per_page: 30
+        },
+        headers: {
+          'Accept': 'application/json'
+        }
+      });
+      setEvents(response.data.data.events);
+      setPagination(response.data.data.pagination);
+    } catch (err) {
+      setError('Failed to fetch events. Please try again later.');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  // Fetch event types when component mounts
+  const fetchEventTypes = async () => {
+    try {
+      const response = await axios.get(`${ADMIN_BASE_URL}/event-types/all`, {
+        headers: {
+          'Accept': 'application/json'
+        }
+      });
+      
+      let eventTypesData: EventType[] = [];
+      if (response.data.status === 'success' && response.data.data) {
+        eventTypesData = response.data.data.event_types || response.data.data;
+      } else if (Array.isArray(response.data)) {
+        eventTypesData = response.data;
+      }
+      
+      eventTypesData.sort((a, b) => a.name.localeCompare(b.name));
+      setEventTypes(eventTypesData);
+    } catch (err) {
+      setEventTypes([]);
+    }
+  };
 
   // Fetch event frequencies when component mounts
   const fetchEventFrequencies = async () => {
     try {
-      setIsLoadingFrequencies(true);
       const response = await axios.get(`${ADMIN_BASE_URL}/event-frequencies/all`, {
         headers: {
           'Accept': 'application/json'
         }
       });
       
-      // Handle different possible response structures
       if (response.data.status === 'success' && response.data.data) {
         setEventFrequencies(response.data.data.frequencies || response.data.data);
       } else if (Array.isArray(response.data)) {
         setEventFrequencies(response.data);
-      } else {
-        console.warn('Unexpected response structure:', response.data);
-        setEventFrequencies([]);
       }
     } catch (err) {
-      console.error('Error fetching event frequencies:', err);
       setEventFrequencies([]);
-    } finally {
-      setIsLoadingFrequencies(false);
     }
   };
 
   // Fetch churches when component mounts
   const fetchChurches = async () => {
     try {
-      setIsLoadingChurches(true);
       const response = await axios.get(`${ADMIN_BASE_URL}/churches/all`, {
         headers: {
           'Accept': 'application/json'
         }
       });
       
-      // Handle different possible response structures
       if (response.data.status === 'success' && response.data.data) {
         setChurches(response.data.data.churches || response.data.data);
       } else if (Array.isArray(response.data)) {
         setChurches(response.data);
-      } else {
-        console.warn('Unexpected response structure:', response.data);
-        setChurches([]);
       }
     } catch (err) {
-      console.error('Error fetching churches:', err);
       setChurches([]);
-    } finally {
-      setIsLoadingChurches(false);
+    }
+  };
+
+  // Fetch church locations when component mounts
+  const fetchChurchLocations = async () => {
+    try {
+      const response = await axios.get(`${ADMIN_BASE_URL}/church-locations/all`, {
+        headers: {
+          'Accept': 'application/json'
+        }
+      });
+      
+      if (response.data.status === 'success' && response.data.data) {
+        setChurchLocations(response.data.data.locations || response.data.data);
+      } else if (Array.isArray(response.data)) {
+        setChurchLocations(response.data);
+      }
+    } catch (err) {
+      setChurchLocations([]);
     }
   };
 
   useEffect(() => {
+    fetchEvents(currentPage);
+  }, [currentPage]);
+
+  useEffect(() => {
+    fetchEventTypes();
     fetchEventFrequencies();
     fetchChurches();
+    fetchChurchLocations();
   }, []);
 
-  const itemsPerPage = 10;
-  const filteredEvents = events.filter(event => 
-    event.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    event.eventType.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    event.churchName.toLowerCase().includes(searchTerm.toLowerCase())
-  );
-  
-  const totalPages = Math.ceil(filteredEvents.length / itemsPerPage);
-  const startIndex = (currentPage - 1) * itemsPerPage;
-  const paginatedEvents = filteredEvents.slice(startIndex, startIndex + itemsPerPage);
-
-  const handleAddEvent = async (eventData: Omit<Event, 'id'>) => {
+  const handleAddEvent = async (formData: FormData) => {
     try {
       setIsSubmitting(true);
-      // TODO: Replace with actual API call
-      // await axios.post(`${ADMIN_BASE_URL}/events`, eventData);
+      setError(null);
       
-      // For now, add to local state with a new ID
-      const newEvent: Event = {
-        ...eventData,
-        id: `${Date.now()}`
-      };
-      setEvents([...events, newEvent]);
-      setShowAddModal(false);
-    } catch (err) {
-      console.error('Error adding event:', err);
-      throw err;
+      const response = await axios.post(`${ADMIN_BASE_URL}/events/create`, formData, {
+        headers: {
+          'Content-Type': 'multipart/form-data',
+          'Accept': 'application/json'
+        }
+      });
+      
+      if (response.data.status === 'success' || response.status === 200 || response.status === 201) {
+        await fetchEvents(currentPage);
+        setShowAddModal(false);
+      } else {
+        throw new Error(response.data.message || 'Failed to create event');
+      }
+    } catch (err: any) {
+      let errorMessage = 'Failed to create event. Please try again.';
+      if (err.response?.data?.message) {
+        errorMessage = err.response.data.message;
+      } else if (err.response?.data?.error) {
+        errorMessage = err.response.data.error;
+      } else if (err.message) {
+        errorMessage = err.message;
+      }
+      
+      setError(errorMessage);
+      throw new Error(errorMessage);
     } finally {
       setIsSubmitting(false);
     }
   };
 
-  const handleEditEvent = async (eventData: Partial<Event>) => {
-    if (editingEvent) {
-      try {
-        setIsSubmitting(true);
-        // TODO: Replace with actual API call
-        // await axios.put(`${ADMIN_BASE_URL}/events/${editingEvent.id}`, eventData);
-        
-        // For now, update local state
-        setEvents(events.map(event => 
-          event.id === editingEvent.id 
-            ? { ...event, ...eventData }
-            : event
-        ));
+  const handleEditEvent = async (formData: FormData) => {
+    try {
+      setIsSubmitting(true);
+      setError(null);
+      
+      const response = await axios.post(`${ADMIN_BASE_URL}/events/edit`, formData, {
+        headers: {
+          'Content-Type': 'multipart/form-data',
+          'Accept': 'application/json'
+        }
+      });
+      
+      if (response.data.status === 'success' || response.status === 200 || response.status === 201) {
+        await fetchEvents(currentPage);
         setEditingEvent(null);
-      } catch (err) {
-        console.error('Error updating event:', err);
-        throw err;
-      } finally {
-        setIsSubmitting(false);
+      } else {
+        throw new Error(response.data.message || 'Failed to update event');
       }
+    } catch (err: any) {
+      let errorMessage = 'Failed to update event. Please try again.';
+      if (err.response?.data?.message) {
+        errorMessage = err.response.data.message;
+      } else if (err.response?.data?.error) {
+        errorMessage = err.response.data.error;
+      } else if (err.message) {
+        errorMessage = err.message;
+      }
+      
+      setError(errorMessage);
+      throw new Error(errorMessage);
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -790,24 +1332,87 @@ export function Events() {
     if (selectedEvent) {
       try {
         setIsDeleting(true);
-        // TODO: Replace with actual API call
-        // await axios.delete(`${ADMIN_BASE_URL}/events/${selectedEvent.id}`);
+        setError(null);
         
-        // For now, remove from local state
-        setEvents(events.filter(event => event.id !== selectedEvent.id));
-        setSelectedEvent(null);
-      } catch (err) {
-        console.error('Error deleting event:', err);
+        const formData = new FormData();
+        formData.append('id', selectedEvent.id);
+        
+        const response = await axios.post(`${ADMIN_BASE_URL}/events/delete`, formData, {
+          headers: {
+            'Content-Type': 'multipart/form-data',
+            'Accept': 'application/json'
+          }
+        });
+        
+        if (response.data.status === 'success' || response.status === 200 || response.status === 201) {
+          await fetchEvents(currentPage);
+          setSelectedEvent(null);
+        } else {
+          throw new Error(response.data.message || 'Failed to delete event');
+        }
+      } catch (err: any) {
+        let errorMessage = 'Failed to delete event. Please try again later.';
+        if (err.response?.data?.message) {
+          errorMessage = err.response.data.message;
+        } else if (err.response?.data?.error) {
+          errorMessage = err.response.data.error;
+        } else if (err.message) {
+          errorMessage = err.message;
+        }
+        
+        setError(errorMessage);
       } finally {
         setIsDeleting(false);
       }
     }
   };
 
+  const filteredEvents = events.filter(event => 
+    event.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+    event.type_name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+    event.church_name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+    event.notes.toLowerCase().includes(searchTerm.toLowerCase())
+  );
+
+  if (isLoading && !events.length) {
+    return (
+      <div className="p-6">
+        <div className="flex justify-between items-center mb-6">
+          <h1 className="text-2xl font-semibold text-gray-800">Events</h1>
+        </div>
+        <div className="flex items-center justify-center h-64">
+          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-600"></div>
+        </div>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="p-6">
+        <div className="flex justify-between items-center mb-6">
+          <h1 className="text-2xl font-semibold text-gray-800">Events</h1>
+        </div>
+        <div className="bg-red-50 border border-red-200 rounded-lg p-4">
+          <p className="text-red-600">{error}</p>
+          <button 
+            onClick={() => {
+              setError(null);
+              fetchEvents(currentPage);
+            }}
+            className="mt-2 text-sm text-indigo-600 hover:text-indigo-800"
+          >
+            Try again
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="p-6">
       <div className="flex justify-between items-center mb-6">
-        <h1 className="text-2xl font-semibold text-gray-800">All Events</h1>
+        <h1 className="text-2xl font-semibold text-gray-800">Events</h1>
         <div className="flex items-center space-x-4">
           <div className="relative">
             <Search className="w-5 h-5 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2" />
@@ -834,36 +1439,36 @@ export function Events() {
           <thead className="bg-gray-50">
             <tr>
               <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Name</th>
-              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Type</th>
+              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Event Type</th>
               <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Schedule</th>
-              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Location</th>
+              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Church</th>
               <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Notes</th>
               <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
             </tr>
           </thead>
           <tbody className="bg-white divide-y divide-gray-200">
-            {paginatedEvents.map((event) => (
+            {filteredEvents.map((event) => (
               <tr key={event.id} className="hover:bg-gray-50">
                 <td className="px-6 py-4 whitespace-nowrap">
                   <div className="text-sm font-medium text-gray-900">{event.name}</div>
-                  <div className="text-sm text-gray-500">{event.churchName}</div>
+                  <div className="text-sm text-gray-500">{event.frequency_name}</div>
                 </td>
                 <td className="px-6 py-4 whitespace-nowrap">
                   <span className="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-blue-100 text-blue-800">
-                    {event.eventType}
+                    {event.type_name}
                   </span>
                 </td>
                 <td className="px-6 py-4 whitespace-nowrap">
-                  <div className="text-sm text-gray-900">{getDayName(event.day)}</div>
+                  <div className="text-sm text-gray-900">{formatDate(event.date)}</div>
                   <div className="text-sm text-gray-500">
                     {formatTime(event.time)} ({event.duration} mins)
                   </div>
                 </td>
                 <td className="px-6 py-4">
-                  <div className="text-sm text-gray-900">{event.locationAddress}</div>
+                  <div className="text-sm text-gray-900">{event.church_name}</div>
                 </td>
                 <td className="px-6 py-4">
-                  <div className="text-sm text-gray-500">{event.additionalText || '-'}</div>
+                  <div className="text-sm text-gray-500 max-w-xs truncate">{event.notes || '-'}</div>
                 </td>
                 <td className="px-6 py-4 whitespace-nowrap text-sm">
                   <div className="flex space-x-2">
@@ -886,68 +1491,73 @@ export function Events() {
           </tbody>
         </table>
 
-        <div className="bg-white px-4 py-3 flex items-center justify-between border-t border-gray-200 sm:px-6">
-          <div className="flex-1 flex justify-between sm:hidden">
-            <button
-              onClick={() => setCurrentPage(page => Math.max(page - 1, 1))}
-              disabled={currentPage === 1}
-              className="relative inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50"
-            >
-              Previous
-            </button>
-            <button
-              onClick={() => setCurrentPage(page => Math.min(page + 1, totalPages))}
-              disabled={currentPage === totalPages}
-              className="ml-3 relative inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50"
-            >
-              Next
-            </button>
-          </div>
-          <div className="hidden sm:flex-1 sm:flex sm:items-center sm:justify-between">
-            <div>
-              <p className="text-sm text-gray-700">
-                Showing <span className="font-medium">{startIndex + 1}</span> to{' '}
-                <span className="font-medium">
-                  {Math.min(startIndex + itemsPerPage, filteredEvents.length)}
-                </span>{' '}
-                of <span className="font-medium">{filteredEvents.length}</span> results
-              </p>
+        {pagination && (
+          <div className="bg-white px-4 py-3 flex items-center justify-between border-t border-gray-200 sm:px-6">
+            <div className="flex-1 flex justify-between sm:hidden">
+              <button
+                onClick={() => setCurrentPage(page => Math.max(page - 1, 1))}
+                disabled={!pagination.has_prev_page}
+                className="relative inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50"
+              >
+                Previous
+              </button>
+              <button
+                onClick={() => setCurrentPage(page => Math.min(page + 1, pagination.total_pages))}
+                disabled={!pagination.has_next_page}
+                className="ml-3 relative inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50"
+              >
+                Next
+              </button>
             </div>
-            <div>
-              <nav className="relative z-0 inline-flex rounded-md shadow-sm -space-x-px" aria-label="Pagination">
-                <button
-                  onClick={() => setCurrentPage(page => Math.max(page - 1, 1))}
-                  disabled={currentPage === 1}
-                  className="relative inline-flex items-center px-2 py-2 rounded-l-md border border-gray-300 bg-white text-sm font-medium text-gray-500 hover:bg-gray-50"
-                >
-                  <span className="sr-only">Previous</span>
-                  <ChevronLeft className="h-5 w-5" />
-                </button>
-                {Array.from({ length: totalPages }, (_, i) => i + 1).map((page) => (
+            <div className="hidden sm:flex-1 sm:flex sm:items-center sm:justify-between">
+              <div>
+                <p className="text-sm text-gray-700">
+                  Showing <span className="font-medium">{(pagination.current_page - 1) * pagination.per_page + 1}</span> to{' '}
+                  <span className="font-medium">
+                    {Math.min(pagination.current_page * pagination.per_page, pagination.total)}
+                  </span>{' '}
+                  of <span className="font-medium">{pagination.total}</span> results
+                </p>
+              </div>
+              <div>
+                <nav className="relative z-0 inline-flex rounded-md shadow-sm -space-x-px" aria-label="Pagination">
                   <button
-                    key={page}
-                    onClick={() => setCurrentPage(page)}
-                    className={`relative inline-flex items-center px-4 py-2 border text-sm font-medium ${
-                      page === currentPage
-                        ? 'z-10 bg-indigo-50 border-indigo-500 text-indigo-600'
-                        : 'bg-white border-gray-300 text-gray-500 hover:bg-gray-50'
-                    }`}
+                    onClick={() => setCurrentPage(page => Math.max(page - 1, 1))}
+                    disabled={!pagination.has_prev_page}
+                    className="relative inline-flex items-center px-2 py-2 rounded-l-md border border-gray-300 bg-white text-sm font-medium text-gray-500 hover:bg-gray-50"
                   >
-                    {page}
+                    <span className="sr-only">Previous</span>
+                    <ChevronLeft className="h-5 w-5" />
                   </button>
-                ))}
-                <button
-                  onClick={() => setCurrentPage(page => Math.min(page + 1, totalPages))}
-                  disabled={currentPage === totalPages}
-                  className="relative inline-flex items-center px-2 py-2 rounded-r-md border border-gray-300 bg-white text-sm font-medium text-gray-500 hover:bg-gray-50"
-                >
-                  <span className="sr-only">Next</span>
-                  <ChevronRight className="h-5 w-5" />
-                </button>
-              </nav>
+                  {Array.from({ length: Math.min(pagination.total_pages, 10) }, (_, i) => {
+                    const page = i + 1;
+                    return (
+                      <button
+                        key={page}
+                        onClick={() => setCurrentPage(page)}
+                        className={`relative inline-flex items-center px-4 py-2 border text-sm font-medium ${
+                          page === pagination.current_page
+                            ? 'z-10 bg-indigo-50 border-indigo-500 text-indigo-600'
+                            : 'bg-white border-gray-300 text-gray-500 hover:bg-gray-50'
+                        }`}
+                      >
+                        {page}
+                      </button>
+                    );
+                  })}
+                  <button
+                    onClick={() => setCurrentPage(page => Math.min(page + 1, pagination.total_pages))}
+                    disabled={!pagination.has_next_page}
+                    className="relative inline-flex items-center px-2 py-2 rounded-r-md border border-gray-300 bg-white text-sm font-medium text-gray-500 hover:bg-gray-50"
+                  >
+                    <span className="sr-only">Next</span>
+                    <ChevronRight className="h-5 w-5" />
+                  </button>
+                </nav>
+              </div>
             </div>
           </div>
-        </div>
+        )}
       </div>
 
       {selectedEvent && (
@@ -965,6 +1575,10 @@ export function Events() {
           onClose={() => setEditingEvent(null)}
           onConfirm={handleEditEvent}
           isSubmitting={isSubmitting}
+          eventFrequencies={eventFrequencies}
+          churches={churches}
+          eventTypes={eventTypes}
+          churchLocations={churchLocations}
         />
       )}
 
@@ -975,6 +1589,8 @@ export function Events() {
           isSubmitting={isSubmitting}
           eventFrequencies={eventFrequencies}
           churches={churches}
+          eventTypes={eventTypes}
+          churchLocations={churchLocations}
         />
       )}
     </div>
